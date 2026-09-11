@@ -118,7 +118,7 @@ export function QueueApp() {
   useEffect(() => {
     if (!profileReady || !profile) return;
     void load();
-    const timer = window.setInterval(() => void load(), 8000);
+    const timer = window.setInterval(() => void load(), 5000);
     return () => window.clearInterval(timer);
   }, [load, profile, profileReady]);
 
