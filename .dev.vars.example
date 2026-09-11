@@ -1,0 +1,3 @@
+ADMIN_USERNAME=your-admin-username
+ADMIN_PASSWORD=use-a-strong-password
+ADMIN_SESSION_SECRET=generate-at-least-24-random-characters

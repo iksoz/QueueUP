@@ -3,9 +3,9 @@
 ## First release
 
 - Mobile-first live view for four starting courts.
-- Signed-in players can see every court, join one queue, leave it, hop on when first in line, and hop off back to the end of the queue.
+- Players can browse without an account, choose a display name on their device, join one queue, leave it, hop on when first in line, and hop off back to the end of the queue.
 - Four players maximum can be marked on court. Capacity and queue order are enforced by the server.
-- The first signed-in account becomes the initial admin. Admins can create courts, add walk-in players to a queue, and remove players from a court or queue.
+- Admins sign in through the app's protected Admin entry. They can create courts, add walk-in players to a queue, and remove players from a court or queue.
 - Shared database state refreshes automatically so separate phones see the same court status.
 
 ## Rules encoded in the MVP
