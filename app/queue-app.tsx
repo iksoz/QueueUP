@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CirclePlus, Clock3, Crown, DoorOpen, LogIn, LogOut, Shield, UserMinus, UserPlus, Users } from "lucide-react";
+import { CirclePlus, Clock3, Crown, DoorOpen, LogIn, LogOut, Pencil, Shield, UserMinus, UserPlus, Users } from "lucide-react";
 import { toast } from "sonner";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -77,7 +77,6 @@ export function QueueApp() {
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
   const [profileReady, setProfileReady] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [pendingJoinId, setPendingJoinId] = useState<number | null>(null);
   const [courtName, setCourtName] = useState("");
   const [playerName, setPlayerName] = useState("");
   const [myName, setMyName] = useState("");
@@ -91,12 +90,9 @@ export function QueueApp() {
       if (saved) {
         const parsed = JSON.parse(saved) as Profile;
         if (parsed.id && parsed.name) setProfile(parsed);
-      } else {
-        setProfileDialogOpen(true);
       }
     } catch {
       window.localStorage.removeItem(PROFILE_KEY);
-      setProfileDialogOpen(true);
     } finally {
       setProfileReady(true);
     }
@@ -120,11 +116,11 @@ export function QueueApp() {
   }, [profile]);
 
   useEffect(() => {
-    if (!profileReady) return;
+    if (!profileReady || !profile) return;
     void load();
     const timer = window.setInterval(() => void load(), 8000);
     return () => window.clearInterval(timer);
-  }, [load, profileReady]);
+  }, [load, profile, profileReady]);
 
   const act = useCallback(async (action: Action, success?: string, profileOverride?: Profile | null) => {
     setBusy(true);
@@ -153,28 +149,24 @@ export function QueueApp() {
   const savePlayer = useCallback(async () => {
     const name = myName.trim();
     if (!name) return;
-    const nextProfile: Profile = { id: crypto.randomUUID(), name };
+    const isEditing = Boolean(profile);
+    const nextProfile: Profile = { id: profile?.id ?? crypto.randomUUID(), name };
     window.localStorage.setItem(PROFILE_KEY, JSON.stringify(nextProfile));
     setProfile(nextProfile);
     setProfileDialogOpen(false);
     setMyName("");
-    const courtId = pendingJoinId;
-    setPendingJoinId(null);
-    if (courtId) {
-      await act({ action: "join", courtId }, "You joined the queue", nextProfile);
-    } else {
-      await load(nextProfile);
-    }
-  }, [act, load, myName, pendingJoinId]);
+    await load(nextProfile);
+    if (isEditing) toast.success("Display name updated");
+  }, [load, myName, profile]);
 
   const openPlayerJoin = useCallback((courtId: number) => {
-    if (state?.me) {
-      void act({ action: "join", courtId }, "You joined the queue");
-      return;
-    }
-    setPendingJoinId(courtId);
+    void act({ action: "join", courtId }, "You joined the queue");
+  }, [act]);
+
+  const openProfileEditor = useCallback(() => {
+    setMyName(profile?.name ?? "");
     setProfileDialogOpen(true);
-  }, [act, state?.me]);
+  }, [profile]);
 
   const adminLogin = useCallback(async () => {
     setBusy(true);
@@ -264,6 +256,51 @@ export function QueueApp() {
     return null;
   }, [state]);
 
+  if (!profileReady) {
+    return (
+      <main className="grid min-h-dvh place-items-center bg-[#07110d] text-white">
+        <div className="flex items-center gap-3 text-base font-semibold">
+          <span className="size-3 animate-pulse rounded-full bg-[#d9ff63]" /> Opening QueueUP…
+        </div>
+      </main>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <main className="grid min-h-dvh place-items-center bg-[#07110d] p-4 text-[#f4f7ef]">
+        <Toaster position="top-center" />
+        <section className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#102019] p-6 shadow-[0_30px_80px_rgba(0,0,0,.35)] sm:p-8">
+          <div className="grid size-12 place-items-center rounded-2xl bg-[#d9ff63] text-lg font-black tracking-[-.12em] text-[#142115] shadow-[0_0_30px_rgba(217,255,99,.18)]">QU</div>
+          <h1 className="mt-6 text-3xl font-black tracking-[-.05em]">Enter your display name</h1>
+          <p className="mt-2 text-base leading-relaxed text-white/55">Players need a name before viewing or joining the live courts. It will be remembered on this device.</p>
+          <form
+            className="mt-6"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void savePlayer();
+            }}
+          >
+            <label className="block text-sm font-bold" htmlFor="new-player-display-name">Display name</label>
+            <Input
+              id="new-player-display-name"
+              autoFocus
+              autoComplete="nickname"
+              value={myName}
+              maxLength={40}
+              placeholder="e.g. Jordan"
+              className="mt-2 h-12 border-white/15 bg-black/15 text-white placeholder:text-white/30"
+              onChange={(event) => setMyName(event.target.value)}
+            />
+            <Button type="submit" disabled={busy || !myName.trim()} className="mt-5 h-12 w-full bg-[#d9ff63] text-base font-black text-[#142115] hover:bg-[#c8ef4e]">
+              Continue to courts
+            </Button>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
   if (!state && !error) {
     return (
       <main className="grid min-h-dvh place-items-center bg-[#07110d] text-white">
@@ -313,9 +350,18 @@ export function QueueApp() {
               {state.me?.role === "admin" ? <LogOut /> : <LogIn />}
               <span className="hidden sm:inline">{state.me?.role === "admin" ? "Exit admin" : "Admin"}</span>
             </Button>
-            <div className="grid size-10 place-items-center rounded-full border border-white/15 bg-white/8 text-sm font-black">
-              {state.me ? initials(state.me.displayName) : "?"}
-            </div>
+            <button
+              type="button"
+              className="group relative grid size-10 place-items-center rounded-full border border-white/15 bg-white/8 text-sm font-black transition hover:border-[#d9ff63]/60 hover:bg-white/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#d9ff63]"
+              aria-label="Edit display name"
+              title="Edit display name"
+              onClick={openProfileEditor}
+            >
+              {initials(profile.name)}
+              <span className="absolute -bottom-0.5 -right-0.5 grid size-4 place-items-center rounded-full bg-[#d9ff63] text-[#142115]">
+                <Pencil className="size-2.5" />
+              </span>
+            </button>
           </div>
         </div>
       </header>
@@ -473,10 +519,7 @@ export function QueueApp() {
 
       <Dialog
         open={profileDialogOpen}
-        onOpenChange={(open) => {
-          setProfileDialogOpen(open);
-          if (!open) setPendingJoinId(null);
-        }}
+        onOpenChange={setProfileDialogOpen}
       >
         <DialogContent className="border-white/10 bg-[#102019] text-white">
           <form
@@ -486,15 +529,16 @@ export function QueueApp() {
             }}
           >
             <DialogHeader>
-              <DialogTitle>What should players call you?</DialogTitle>
+              <DialogTitle>Edit display name</DialogTitle>
               <DialogDescription className="text-white/55">
-                No account needed. Your name and queue spot are remembered on this device.
+                This updates your name everywhere you appear in the courts and queues.
               </DialogDescription>
             </DialogHeader>
-            <label className="mt-5 block text-sm font-bold" htmlFor="player-display-name">Player name</label>
+            <label className="mt-5 block text-sm font-bold" htmlFor="player-display-name">Display name</label>
             <Input
               id="player-display-name"
               autoFocus
+              autoComplete="nickname"
               value={myName}
               maxLength={40}
               placeholder="e.g. Jordan"
@@ -502,12 +546,9 @@ export function QueueApp() {
               onChange={(event) => setMyName(event.target.value)}
             />
             <DialogFooter className="mt-6">
-              <Button type="button" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => {
-                setProfileDialogOpen(false);
-                setPendingJoinId(null);
-              }}>Browse first</Button>
+              <Button type="button" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => setProfileDialogOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={busy || !myName.trim()} className="bg-[#d9ff63] text-[#142115] hover:bg-[#c8ef4e]">
-                {pendingJoinId ? "Save & join" : "Save name"}
+                Save name
               </Button>
             </DialogFooter>
           </form>

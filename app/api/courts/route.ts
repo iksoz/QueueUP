@@ -39,7 +39,17 @@ async function upsertUser(db: D1Database, user: RequestUser) {
 
 async function requestUser(db: D1Database, request: Request): Promise<RequestUser | null> {
   const adminUsername = await getAdminUsername(request);
+  const deviceId = request.headers.get("x-queueup-player-id")?.trim() ?? "";
+  const displayName = request.headers.get("x-queueup-player-name")?.trim() ?? "";
   if (adminUsername) {
+    if (/^[a-zA-Z0-9_-]{8,80}$/.test(deviceId) && displayName && displayName.length <= 40) {
+      await upsertUser(db, {
+        id: `player:${deviceId}`,
+        email: "",
+        displayName,
+        role: "player",
+      });
+    }
     return upsertUser(db, {
       id: `admin:${adminUsername.toLowerCase()}`,
       email: "",
@@ -48,8 +58,6 @@ async function requestUser(db: D1Database, request: Request): Promise<RequestUse
     });
   }
 
-  const deviceId = request.headers.get("x-queueup-player-id")?.trim() ?? "";
-  const displayName = request.headers.get("x-queueup-player-name")?.trim() ?? "";
   if (!deviceId && !displayName) return null;
   if (!/^[a-zA-Z0-9_-]{8,80}$/.test(deviceId) || !displayName || displayName.length > 40) {
     throw new Error("PLAYER_PROFILE_REQUIRED");
