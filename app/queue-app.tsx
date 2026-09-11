@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CirclePlus, Clock3, Crown, DoorOpen, LogOut, Shield, UserMinus, UserPlus, Users } from "lucide-react";
+import { CirclePlus, Clock3, Crown, DoorOpen, LogIn, LogOut, Shield, UserMinus, UserPlus, Users } from "lucide-react";
 import { toast } from "sonner";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -21,10 +21,19 @@ type Member = {
 };
 type Court = { id: number; name: string; createdAt: number; players: Member[]; queue: Member[] };
 type State = {
-  me: { id: string; email: string; displayName: string; role: "admin" | "player" };
+  me: { id: string; email: string; displayName: string; role: "admin" | "player" } | null;
   courts: Court[];
 };
 type Action = { action: string; courtId?: number; membershipId?: number; name?: string };
+type Profile = { id: string; name: string };
+
+const PROFILE_KEY = "queueup-player-profile";
+
+function profileHeaders(profile: Profile | null) {
+  return profile
+    ? { "x-queueup-player-id": profile.id, "x-queueup-player-name": profile.name }
+    : {};
+}
 
 declare global {
   interface Document {
@@ -64,13 +73,42 @@ export function QueueApp() {
   const [error, setError] = useState<string | null>(null);
   const [courtDialogOpen, setCourtDialogOpen] = useState(false);
   const [playerDialogOpen, setPlayerDialogOpen] = useState(false);
+  const [profileDialogOpen, setProfileDialogOpen] = useState(false);
+  const [adminDialogOpen, setAdminDialogOpen] = useState(false);
+  const [profileReady, setProfileReady] = useState(false);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [pendingJoinId, setPendingJoinId] = useState<number | null>(null);
   const [courtName, setCourtName] = useState("");
   const [playerName, setPlayerName] = useState("");
+  const [myName, setMyName] = useState("");
+  const [adminUsername, setAdminUsername] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
   const [kickTarget, setKickTarget] = useState<Member | null>(null);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
     try {
-      const response = await fetch("/api/courts", { cache: "no-store" });
+      const saved = window.localStorage.getItem(PROFILE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as Profile;
+        if (parsed.id && parsed.name) setProfile(parsed);
+      } else {
+        setProfileDialogOpen(true);
+      }
+    } catch {
+      window.localStorage.removeItem(PROFILE_KEY);
+      setProfileDialogOpen(true);
+    } finally {
+      setProfileReady(true);
+    }
+  }, []);
+
+  const load = useCallback(async (profileOverride?: Profile | null) => {
+    try {
+      const activeProfile = profileOverride === undefined ? profile : profileOverride;
+      const response = await fetch("/api/courts", {
+        cache: "no-store",
+        headers: profileHeaders(activeProfile),
+      });
       const data = (await response.json()) as State & { error?: string };
       if (!response.ok) throw new Error(data.error ?? "Could not load courts.");
       setState(data);
@@ -79,19 +117,23 @@ export function QueueApp() {
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load courts.");
     }
-  }, []);
+  }, [profile]);
 
   useEffect(() => {
+    if (!profileReady) return;
     void load();
     const timer = window.setInterval(() => void load(), 8000);
     return () => window.clearInterval(timer);
-  }, [load]);
+  }, [load, profileReady]);
 
-  const act = useCallback(async (action: Action, success?: string) => {
+  const act = useCallback(async (action: Action, success?: string, profileOverride?: Profile | null) => {
     setBusy(true);
     try {
+      const activeProfile = profileOverride === undefined ? profile : profileOverride;
       const response = await fetch("/api/courts", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(action),
+        method: "POST",
+        headers: { "content-type": "application/json", ...profileHeaders(activeProfile) },
+        body: JSON.stringify(action),
       });
       const data = (await response.json()) as State & { error?: string };
       if (!response.ok) throw new Error(data.error ?? "That action did not work.");
@@ -106,7 +148,66 @@ export function QueueApp() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [profile]);
+
+  const savePlayer = useCallback(async () => {
+    const name = myName.trim();
+    if (!name) return;
+    const nextProfile: Profile = { id: crypto.randomUUID(), name };
+    window.localStorage.setItem(PROFILE_KEY, JSON.stringify(nextProfile));
+    setProfile(nextProfile);
+    setProfileDialogOpen(false);
+    setMyName("");
+    const courtId = pendingJoinId;
+    setPendingJoinId(null);
+    if (courtId) {
+      await act({ action: "join", courtId }, "You joined the queue", nextProfile);
+    } else {
+      await load(nextProfile);
+    }
+  }, [act, load, myName, pendingJoinId]);
+
+  const openPlayerJoin = useCallback((courtId: number) => {
+    if (state?.me) {
+      void act({ action: "join", courtId }, "You joined the queue");
+      return;
+    }
+    setPendingJoinId(courtId);
+    setProfileDialogOpen(true);
+  }, [act, state?.me]);
+
+  const adminLogin = useCallback(async () => {
+    setBusy(true);
+    try {
+      const response = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: adminUsername, password: adminPassword }),
+      });
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Admin login failed.");
+      setAdminDialogOpen(false);
+      setAdminUsername("");
+      setAdminPassword("");
+      await load();
+      toast.success("Admin mode unlocked");
+    } catch (loginError) {
+      toast.error(loginError instanceof Error ? loginError.message : "Admin login failed.");
+    } finally {
+      setBusy(false);
+    }
+  }, [adminPassword, adminUsername, load]);
+
+  const adminLogout = useCallback(async () => {
+    setBusy(true);
+    try {
+      await fetch("/api/admin/logout", { method: "POST" });
+      await load();
+      toast.success("Admin mode closed");
+    } finally {
+      setBusy(false);
+    }
+  }, [load]);
 
   useEffect(() => {
     const context = document.modelContext;
@@ -121,7 +222,10 @@ export function QueueApp() {
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: { readOnlyHint: true, untrustedContentHint: false },
       execute: async () => {
-        const response = await fetch("/api/courts", { cache: "no-store" });
+        const response = await fetch("/api/courts", {
+          cache: "no-store",
+          headers: profileHeaders(profile),
+        });
         if (!response.ok) throw new Error("Could not read live courts.");
         const data = (await response.json()) as State;
         setState(data);
@@ -142,18 +246,19 @@ export function QueueApp() {
       execute: async (input) => {
         const courtId = Number((input as { courtId?: number })?.courtId);
         if (!Number.isInteger(courtId) || courtId < 1) throw new Error("courtId must be a positive integer.");
+        if (!state?.me) throw new Error("Choose your player name in QueueUP before joining a court.");
         const data = await act({ action: "join", courtId });
         return { joined: true, courtId, state: data };
       },
     });
     return () => lifecycle.abort();
-  }, [act]);
+  }, [act, profile, state?.me]);
 
   const selected = state?.courts.find((court) => court.id === selectedId) ?? state?.courts[0];
   const myMembership = useMemo(() => {
-    if (!state) return null;
+    if (!state?.me) return null;
     for (const court of state.courts) {
-      const member = [...court.players, ...court.queue].find((item) => item.userId === state.me.id);
+      const member = [...court.players, ...court.queue].find((item) => item.userId === state.me?.id);
       if (member) return { court, member };
     }
     return null;
@@ -182,7 +287,7 @@ export function QueueApp() {
 
   const meOnSelected = myMembership?.court.id === selected.id ? myMembership.member : null;
   const nextUp = selected.queue[0];
-  const canHopOn = Boolean(meOnSelected?.status === "queued" && nextUp?.userId === state.me.id && selected.players.length < 4);
+  const canHopOn = Boolean(meOnSelected?.status === "queued" && nextUp?.userId === state.me?.id && selected.players.length < 4);
   const membershipElsewhere = myMembership && myMembership.court.id !== selected.id;
 
   return (
@@ -200,13 +305,16 @@ export function QueueApp() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {state.me.role === "admin" && (
-              <span className="hidden items-center gap-1.5 rounded-full border border-[#d9ff63]/30 bg-[#d9ff63]/10 px-3 py-1.5 text-xs font-bold text-[#d9ff63] sm:flex">
-                <Shield className="size-3.5" /> Admin
-              </span>
-            )}
+            <Button
+              variant="outline"
+              className="h-10 border-white/15 bg-white/5 px-3 text-white hover:bg-white/10 hover:text-white"
+              onClick={() => state.me?.role === "admin" ? void adminLogout() : setAdminDialogOpen(true)}
+            >
+              {state.me?.role === "admin" ? <LogOut /> : <LogIn />}
+              <span className="hidden sm:inline">{state.me?.role === "admin" ? "Exit admin" : "Admin"}</span>
+            </Button>
             <div className="grid size-10 place-items-center rounded-full border border-white/15 bg-white/8 text-sm font-black">
-              {initials(state.me.displayName)}
+              {state.me ? initials(state.me.displayName) : "?"}
             </div>
           </div>
         </div>
@@ -219,7 +327,7 @@ export function QueueApp() {
               <p className="text-xs font-bold uppercase tracking-[.18em] text-white/40">Tonight</p>
               <h1 className="mt-1 text-2xl font-black tracking-[-.04em]">Choose a court</h1>
             </div>
-            {state.me.role === "admin" && (
+            {state.me?.role === "admin" && (
               <Button size="icon" variant="outline" className="border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white" aria-label="Create court" onClick={() => setCourtDialogOpen(true)}>
                 <CirclePlus />
               </Button>
@@ -268,13 +376,13 @@ export function QueueApp() {
                         <div className="flex h-full flex-col justify-between">
                           <div className="flex items-start justify-between gap-2">
                             <PlayerAvatar name={player.displayName} index={slot} />
-                            {state.me.role === "admin" && player.userId !== state.me.id && (
+                            {state.me?.role === "admin" && player.userId !== state.me.id && (
                               <button className="rounded-lg p-2 text-white/35 hover:bg-white/10 hover:text-white" aria-label={`Remove ${player.displayName}`} onClick={() => setKickTarget(player)}>
                                 <UserMinus className="size-4" />
                               </button>
                             )}
                           </div>
-                          <p className="mt-3 truncate text-sm font-bold">{player.displayName}{player.userId === state.me.id ? " · You" : ""}</p>
+                          <p className="mt-3 truncate text-sm font-bold">{player.displayName}{player.userId === state.me?.id ? " · You" : ""}</p>
                         </div>
                       ) : (
                         <div className="grid h-full place-items-center text-center text-white/25">
@@ -290,7 +398,7 @@ export function QueueApp() {
             <div className="p-5 sm:p-7">
               <div className="flex flex-col gap-3 sm:flex-row">
                 {!myMembership && (
-                  <Button size="lg" disabled={busy} className="h-14 flex-1 rounded-2xl bg-[#d9ff63] text-base font-black text-[#142115] hover:bg-[#c8ef4e]" onClick={() => void act({ action: "join", courtId: selected.id }, `Joined ${selected.name} queue`)}>
+                  <Button size="lg" disabled={busy} className="h-14 flex-1 rounded-2xl bg-[#d9ff63] text-base font-black text-[#142115] hover:bg-[#c8ef4e]" onClick={() => openPlayerJoin(selected.id)}>
                     <UserPlus className="size-5" /> Join this queue
                   </Button>
                 )}
@@ -331,7 +439,7 @@ export function QueueApp() {
           <section className="mt-5 rounded-[28px] border border-white/10 bg-white/[.035] p-5 sm:p-7">
             <div className="flex items-center justify-between gap-3">
               <div><p className="text-xs font-bold uppercase tracking-[.18em] text-white/40">Up next</p><h3 className="mt-1 text-xl font-black">Queue · {selected.queue.length}</h3></div>
-              {state.me.role === "admin" && (
+              {state.me?.role === "admin" && (
                 <Button variant="outline" className="border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white" onClick={() => setPlayerDialogOpen(true)}>
                   <UserPlus /> Add player
                 </Button>
@@ -347,11 +455,11 @@ export function QueueApp() {
                   <span className="w-7 text-center text-sm font-black tabular-nums text-[#d9ff63]">{index + 1}</span>
                   <PlayerAvatar name={player.displayName} index={index + 1} />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-bold">{player.displayName}{player.userId === state.me.id ? " · You" : ""}</p>
+                    <p className="truncate text-sm font-bold">{player.displayName}{player.userId === state.me?.id ? " · You" : ""}</p>
                     <p className="mt-0.5 text-xs text-white/40">{index === 0 ? "Ready to hop on" : `Behind ${index} player${index === 1 ? "" : "s"}`}</p>
                   </div>
                   {index === 0 && <Crown className="size-4 text-[#ffc857]" aria-label="Next player" />}
-                  {state.me.role === "admin" && player.userId !== state.me.id && (
+                  {state.me?.role === "admin" && player.userId !== state.me.id && (
                     <button className="rounded-lg p-2 text-white/35 hover:bg-white/10 hover:text-white" aria-label={`Remove ${player.displayName}`} onClick={() => setKickTarget(player)}>
                       <UserMinus className="size-4" />
                     </button>
@@ -362,6 +470,97 @@ export function QueueApp() {
           </section>
         </section>
       </div>
+
+      <Dialog
+        open={profileDialogOpen}
+        onOpenChange={(open) => {
+          setProfileDialogOpen(open);
+          if (!open) setPendingJoinId(null);
+        }}
+      >
+        <DialogContent className="border-white/10 bg-[#102019] text-white">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void savePlayer();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>What should players call you?</DialogTitle>
+              <DialogDescription className="text-white/55">
+                No account needed. Your name and queue spot are remembered on this device.
+              </DialogDescription>
+            </DialogHeader>
+            <label className="mt-5 block text-sm font-bold" htmlFor="player-display-name">Player name</label>
+            <Input
+              id="player-display-name"
+              autoFocus
+              value={myName}
+              maxLength={40}
+              placeholder="e.g. Jordan"
+              className="mt-2 h-12 border-white/15 bg-black/15 text-white placeholder:text-white/30"
+              onChange={(event) => setMyName(event.target.value)}
+            />
+            <DialogFooter className="mt-6">
+              <Button type="button" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => {
+                setProfileDialogOpen(false);
+                setPendingJoinId(null);
+              }}>Browse first</Button>
+              <Button type="submit" disabled={busy || !myName.trim()} className="bg-[#d9ff63] text-[#142115] hover:bg-[#c8ef4e]">
+                {pendingJoinId ? "Save & join" : "Save name"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={adminDialogOpen} onOpenChange={setAdminDialogOpen}>
+        <DialogContent className="border-white/10 bg-[#102019] text-white">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void adminLogin();
+            }}
+          >
+            <DialogHeader>
+              <div className="mb-2 grid size-11 place-items-center rounded-xl bg-[#d9ff63] text-[#142115]"><Shield className="size-5" /></div>
+              <DialogTitle>Admin login</DialogTitle>
+              <DialogDescription className="text-white/55">
+                Admin mode unlocks court and player management.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-5 space-y-4">
+              <div>
+                <label className="block text-sm font-bold" htmlFor="admin-username">Username</label>
+                <Input
+                  id="admin-username"
+                  autoComplete="username"
+                  value={adminUsername}
+                  className="mt-2 h-12 border-white/15 bg-black/15 text-white"
+                  onChange={(event) => setAdminUsername(event.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold" htmlFor="admin-password">Password</label>
+                <Input
+                  id="admin-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={adminPassword}
+                  className="mt-2 h-12 border-white/15 bg-black/15 text-white"
+                  onChange={(event) => setAdminPassword(event.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter className="mt-6">
+              <Button type="button" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => setAdminDialogOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={busy || !adminUsername.trim() || !adminPassword} className="bg-[#d9ff63] text-[#142115] hover:bg-[#c8ef4e]">
+                <LogIn /> Enter admin mode
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={courtDialogOpen} onOpenChange={setCourtDialogOpen}>
         <DialogContent className="border-white/10 bg-[#102019] text-white">

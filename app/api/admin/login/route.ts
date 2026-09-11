@@ -10,7 +10,7 @@ export async function POST(request: Request) {
     }
     return Response.json(
       { authenticated: true },
-      { headers: { "set-cookie": await createAdminCookie(username) } },
+      { headers: { "set-cookie": await createAdminCookie(username, request) } },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Admin login is unavailable.";

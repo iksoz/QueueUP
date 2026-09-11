@@ -57,17 +57,19 @@ export async function credentialsAreValid(username: string, password: string) {
   return equalBytes(providedHash, expectedHash);
 }
 
-export async function createAdminCookie(username: string) {
+export async function createAdminCookie(username: string, request: Request) {
   const { secret } = config();
   const payload = toBase64Url(
     encoder.encode(JSON.stringify({ username, expiresAt: Math.floor(Date.now() / 1000) + SESSION_SECONDS })),
   );
   const signed = toBase64Url(await signature(payload, secret));
-  return `${COOKIE_NAME}=${payload}.${signed}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_SECONDS}`;
+  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  return `${COOKIE_NAME}=${payload}.${signed}; Path=/; HttpOnly${secure}; SameSite=Strict; Max-Age=${SESSION_SECONDS}`;
 }
 
-export function clearAdminCookie() {
-  return `${COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
+export function clearAdminCookie(request: Request) {
+  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  return `${COOKIE_NAME}=; Path=/; HttpOnly${secure}; SameSite=Strict; Max-Age=0`;
 }
 
 export async function getAdminUsername(request: Request) {
